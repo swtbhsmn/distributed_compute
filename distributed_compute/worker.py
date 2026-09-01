@@ -8,21 +8,44 @@ import socket
 import threading
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 import httpx
 
 from .computations import execute
-from .models import Benchmark
 from .resources import os_name, resource_backend, resource_snapshot
 
 
 DEFAULT_STATE_PATH = Path.home() / ".distributed-compute" / "worker-state.json"
 
 
-def run_benchmark(operations: int = 300_000) -> Benchmark:
+@dataclass(frozen=True)
+class BenchmarkResult:
+    elapsed_seconds: float
+    operations: int
+    operations_per_second: float
+
+    def __post_init__(self) -> None:
+        if self.elapsed_seconds <= 0 or self.operations <= 0 or self.operations_per_second <= 0:
+            raise ValueError("benchmark values must be positive")
+
+    def to_dict(self) -> dict[str, int | float]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, value: Any) -> "BenchmarkResult":
+        if not isinstance(value, dict):
+            raise ValueError("benchmark must be an object")
+        return cls(
+            elapsed_seconds=float(value["elapsed_seconds"]),
+            operations=int(value["operations"]),
+            operations_per_second=float(value["operations_per_second"]),
+        )
+
+
+def run_benchmark(operations: int = 300_000) -> BenchmarkResult:
     """Run a small integer workload and return a simple, comparable score."""
     started = time.perf_counter()
     accumulator = 0
@@ -31,17 +54,17 @@ def run_benchmark(operations: int = 300_000) -> Benchmark:
     elapsed = max(time.perf_counter() - started, 1e-9)
     if accumulator < 0:  # Keeps the loop result observable without affecting timing.
         raise AssertionError("unreachable")
-    return Benchmark(
+    return BenchmarkResult(
         elapsed_seconds=elapsed,
         operations=operations,
         operations_per_second=operations / elapsed,
     )
 
 
-def load_or_create_state(path: Path) -> tuple[str, Benchmark]:
+def load_or_create_state(path: Path) -> tuple[str, BenchmarkResult]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        return str(data["worker_id"]), Benchmark.model_validate(data["benchmark"])
+        return str(data["worker_id"]), BenchmarkResult.from_dict(data["benchmark"])
     except (FileNotFoundError, KeyError, ValueError, TypeError, json.JSONDecodeError):
         worker_id = str(uuid.uuid4())
         benchmark = run_benchmark()
@@ -49,7 +72,7 @@ def load_or_create_state(path: Path) -> tuple[str, Benchmark]:
         temporary = path.with_suffix(path.suffix + ".tmp")
         temporary.write_text(
             json.dumps(
-                {"worker_id": worker_id, "benchmark": benchmark.model_dump()},
+                {"worker_id": worker_id, "benchmark": benchmark.to_dict()},
                 indent=2,
             ),
             encoding="utf-8",
@@ -89,7 +112,7 @@ class ComputeWorker:
             "node": self.node,
             "os_name": os_name(),
             "os_release": platform.release(),
-            "benchmark": self.benchmark.model_dump(),
+            "benchmark": self.benchmark.to_dict(),
             **resource_snapshot(),
         }
 

@@ -16,10 +16,12 @@ Python 3.10 or newer is required.
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install '.[desktop,dev]'
+python -m pip install '.[dev]'
 ```
 
 Start the coordinator. Use a strong token and keep it the same on every device:
+
+For a coordinator-only production installation, use `python -m pip install '.[coordinator]'`. The `dev` installation above already includes those dependencies.
 
 ```bash
 export DISTRIBUTED_COMPUTE_TOKEN='replace-with-a-long-random-token'
@@ -37,7 +39,7 @@ The first worker launch runs a short CPU benchmark and writes its UUID and resul
 
 ## Android / Termux
 
-Install [Termux](https://termux.dev/) from F-Droid, then install Python and Git. Do not install the `desktop` extra on Android: the worker uses `/proc` and standard Python APIs there instead of `psutil`.
+Install [Termux](https://termux.dev/) from F-Droid, then install Python and Git. Install only the base project: it contains the worker and does not depend on FastAPI, Pydantic, `pydantic-core`, or `psutil`. The worker uses `/proc` and standard Python APIs for resource reporting.
 
 ```bash
 pkg update
@@ -51,7 +53,7 @@ compute-worker --coordinator http://192.168.1.20:8000 --name android-phone
 
 The phone and coordinator must be able to reach each other. Allow TCP port 8000 through the coordinator machine's firewall, avoid guest Wi-Fi client isolation, and do not expose this HTTP-only POC directly to the internet.
 
-On desktop worker machines, install the `desktop` extra to use `psutil` for resource reporting:
+On desktop worker machines, install the `desktop` extra to use `psutil` for resource reporting. This still does not install coordinator dependencies:
 
 ```bash
 python -m pip install '.[desktop]'
