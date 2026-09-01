@@ -13,10 +13,10 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-import psutil
 
 from .computations import execute
 from .models import Benchmark
+from .resources import os_name, resource_backend, resource_snapshot
 
 
 DEFAULT_STATE_PATH = Path.home() / ".distributed-compute" / "worker-state.json"
@@ -58,14 +58,6 @@ def load_or_create_state(path: Path) -> tuple[str, Benchmark]:
         return worker_id, benchmark
 
 
-def resource_snapshot(sample_interval: float = 0.1) -> dict[str, int | float]:
-    return {
-        "logical_cpu_cores": psutil.cpu_count(logical=True) or 1,
-        "available_ram_bytes": psutil.virtual_memory().available,
-        "cpu_usage_percent": psutil.cpu_percent(interval=sample_interval),
-    }
-
-
 @dataclass(frozen=True)
 class WorkerConfig:
     coordinator_url: str
@@ -95,7 +87,7 @@ class ComputeWorker:
             "worker_id": self.worker_id,
             "device_name": self.device_name,
             "node": self.node,
-            "os_name": platform.system() or "unknown",
+            "os_name": os_name(),
             "os_release": platform.release(),
             "benchmark": self.benchmark.model_dump(),
             **resource_snapshot(),
@@ -165,7 +157,11 @@ class ComputeWorker:
                         self.register()
                         registered = True
                         backoff = 1.0
-                        print(f"Registered worker {self.worker_id} as {self.device_name}", flush=True)
+                        print(
+                            f"Registered worker {self.worker_id} as {self.device_name} "
+                            f"(resources: {resource_backend()})",
+                            flush=True,
+                        )
 
                     task = self.claim()
                     if task is None:

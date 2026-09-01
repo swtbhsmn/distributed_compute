@@ -10,12 +10,15 @@ requires-python = ">=3.10"
 dependencies = [
   "fastapi>=0.110,<1",
   "httpx>=0.27,<1",
-  "psutil>=5.9,<8",
   "uvicorn>=0.29,<1",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8,<9"]
+desktop = ["psutil>=5.9,<8"]
+dev = [
+  "psutil>=5.9,<8",
+  "pytest>=8,<9",
+]
 
 [project.scripts]
 compute-coordinator = "distributed_compute.coordinator:main"
@@ -26,5 +29,5 @@ include = ["distributed_compute*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 addopts = "-q"
-

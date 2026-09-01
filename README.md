@@ -16,7 +16,7 @@ Python 3.10 or newer is required.
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install '.[dev]'
+python -m pip install '.[desktop,dev]'
 ```
 
 Start the coordinator. Use a strong token and keep it the same on every device:
@@ -37,11 +37,11 @@ The first worker launch runs a short CPU benchmark and writes its UUID and resul
 
 ## Android / Termux
 
-Install [Termux](https://termux.dev/) from F-Droid, then install Python and build tools. `clang` is included because some Termux/Python combinations build `psutil` locally.
+Install [Termux](https://termux.dev/) from F-Droid, then install Python and Git. Do not install the `desktop` extra on Android: the worker uses `/proc` and standard Python APIs there instead of `psutil`.
 
 ```bash
 pkg update
-pkg install python git clang
+pkg install python git
 git clone <this-repository-url>
 cd distributed-compute-poc
 python -m pip install .
@@ -50,6 +50,12 @@ compute-worker --coordinator http://192.168.1.20:8000 --name android-phone
 ```
 
 The phone and coordinator must be able to reach each other. Allow TCP port 8000 through the coordinator machine's firewall, avoid guest Wi-Fi client isolation, and do not expose this HTTP-only POC directly to the internet.
+
+On desktop worker machines, install the `desktop` extra to use `psutil` for resource reporting:
+
+```bash
+python -m pip install '.[desktop]'
+```
 
 ## Submit and inspect jobs
 
@@ -92,7 +98,7 @@ Interactive API documentation is available at `http://COORDINATOR_HOST:8000/docs
 
 ## Behavior and limitations
 
-- Workers send their device name, hostname/node, OS, logical CPU count, available RAM, current CPU utilization, and persisted benchmark during registration. CPU and RAM data are refreshed on every task poll.
+- Workers send their device name, hostname/node, OS, logical CPU count, available RAM, current CPU utilization, and persisted benchmark during registration. CPU and RAM data are refreshed on every task poll. Desktop installs use `psutil`; Android/Termux uses `/proc/stat`, `/proc/meminfo`, and standard Python APIs.
 - Tasks use fixed-size chunks. Faster workers naturally claim more chunks instead of receiving specially sized tasks.
 - A claim has a 30-second lease. Workers renew it with background heartbeats during long computations. An abandoned task is requeued and is permanently failed after three unsuccessful leases or reported failures.
 - The worker reconnects with exponential backoff after network failures.
