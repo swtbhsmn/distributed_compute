@@ -60,6 +60,18 @@ class JobCreate(BaseModel):
         return self
 
 
+class JobWorkerContribution(BaseModel):
+    worker_id: str
+    device_name: str
+    node: str
+    os_name: str
+    logical_cpu_cores: int
+    claimed_attempts: int
+    completed_tasks: int
+    active_tasks: int
+    failed_attempts: int
+
+
 class JobView(BaseModel):
     job_id: str
     job_type: JobType
@@ -68,12 +80,15 @@ class JobView(BaseModel):
     chunk_size: int
     status: str
     created_at: datetime
+    started_at: datetime | None = None
     completed_at: datetime | None = None
     total_tasks: int
     pending_tasks: int
     leased_tasks: int
     completed_tasks: int
     failed_tasks: int
+    worker_count: int
+    workers: list[JobWorkerContribution]
     result: int | None = None
     error: str | None = None
 

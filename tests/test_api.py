@@ -53,6 +53,20 @@ def test_authentication_and_registration() -> None:
         assert workers[0]["online"] is True
 
 
+def test_dashboard_cors_preflight() -> None:
+    with TestClient(create_app(api_token=TOKEN, cors_origins=["http://localhost:5173"])) as client:
+        response = client.options(
+            "/api/v1/jobs",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "authorization",
+            },
+        )
+        assert response.status_code == 200
+        assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
+
+
 def test_sum_squares_job_runs_across_multiple_workers() -> None:
     with TestClient(create_app(api_token=TOKEN)) as client:
         register(client, "worker-1")
@@ -65,6 +79,7 @@ def test_sum_squares_job_runs_across_multiple_workers() -> None:
         assert created.status_code == 201
         job = created.json()
         assert job["total_tasks"] == 6
+        assert job["started_at"] is None
 
         used_workers = set()
         index = 0
@@ -86,7 +101,13 @@ def test_sum_squares_job_runs_across_multiple_workers() -> None:
         finished = client.get(f"/api/v1/jobs/{job['job_id']}", headers=HEADERS).json()
         assert used_workers == {"worker-1", "worker-2"}
         assert finished["status"] == "completed"
+        assert finished["started_at"] is not None
+        assert finished["completed_at"] is not None
         assert finished["result"] == execute("sum_squares", 1, 101)
+        assert finished["worker_count"] == 2
+        assert {worker["device_name"] for worker in finished["workers"]} == {"device-worker-1", "device-worker-2"}
+        assert sum(worker["claimed_attempts"] for worker in finished["workers"]) == 6
+        assert sum(worker["completed_tasks"] for worker in finished["workers"]) == 6
 
 
 def test_prime_count_job_and_idempotent_completion() -> None:
@@ -127,6 +148,9 @@ def test_failure_retries_then_fails_job() -> None:
         failed = client.get(f"/api/v1/jobs/{job['job_id']}", headers=HEADERS).json()
         assert failed["status"] == "failed"
         assert failed["failed_tasks"] == 1
+        assert failed["worker_count"] == 1
+        assert failed["workers"][0]["claimed_attempts"] == 2
+        assert failed["workers"][0]["failed_attempts"] == 2
 
 
 def test_expired_lease_is_reassigned() -> None:
@@ -144,6 +168,9 @@ def test_expired_lease_is_reassigned() -> None:
         second = client.post("/api/v1/tasks/claim", headers=HEADERS, json=claim_payload("worker-2")).json()["task"]
         assert second["task_id"] == first["task_id"]
         assert second["attempt"] == 2
+        job = client.get("/api/v1/jobs", headers=HEADERS).json()[0]
+        assert job["worker_count"] == 2
+        assert sum(worker["failed_attempts"] for worker in job["workers"]) == 1
 
 
 def test_heartbeat_renews_active_task_lease() -> None:

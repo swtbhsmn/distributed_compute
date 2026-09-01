@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from .models import (
@@ -20,6 +21,7 @@ from .models import (
     JobCreate,
     JobType,
     JobView,
+    JobWorkerContribution,
     Message,
     TaskAssignment,
     TaskComplete,
@@ -50,6 +52,8 @@ class TaskState:
     lease_expires_at: datetime | None = None
     result: int | None = None
     last_error: str | None = None
+    claim_counts: dict[str, int] = field(default_factory=dict)
+    failure_counts: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -59,6 +63,7 @@ class JobState:
     created_at: datetime
     task_ids: list[str] = field(default_factory=list)
     status: str = "pending"
+    started_at: datetime | None = None
     completed_at: datetime | None = None
     result: int | None = None
     error: str | None = None
@@ -175,11 +180,14 @@ class InMemoryCoordinator:
             pending.status = "leased"
             pending.attempts += 1
             pending.worker_id = request.worker_id
+            pending.claim_counts[request.worker_id] = pending.claim_counts.get(request.worker_id, 0) + 1
             pending.lease_expires_at = now + timedelta(seconds=self.lease_seconds)
             worker.current_task_id = pending.task_id
             job = self.jobs[pending.job_id]
             if job.status == "pending":
                 job.status = "running"
+                if job.started_at is None:
+                    job.started_at = now
             return ClaimResponse(task=self._assignment(pending))
 
     async def complete(self, task_id: str, completion: TaskComplete) -> Message:
@@ -205,6 +213,7 @@ class InMemoryCoordinator:
             task = self._require_task(task_id)
             self._validate_active_lease(task, failure.worker_id)
             task.last_error = failure.error
+            task.failure_counts[failure.worker_id] = task.failure_counts.get(failure.worker_id, 0) + 1
             task.lease_expires_at = None
             worker = self.workers.get(failure.worker_id)
             if worker and worker.current_task_id == task_id:
@@ -227,6 +236,7 @@ class InMemoryCoordinator:
                 and task.lease_expires_at <= now
             ):
                 if task.worker_id:
+                    task.failure_counts[task.worker_id] = task.failure_counts.get(task.worker_id, 0) + 1
                     worker = self.workers.get(task.worker_id)
                     if worker and worker.current_task_id == task.task_id:
                         worker.current_task_id = None
@@ -269,6 +279,33 @@ class InMemoryCoordinator:
     def _job_view(self, job: JobState) -> JobView:
         tasks = [self.tasks[task_id] for task_id in job.task_ids]
         counts = {name: sum(task.status == name for task in tasks) for name in ("pending", "leased", "completed", "failed")}
+        contribution_data: dict[str, dict[str, int | str]] = {}
+        for task in tasks:
+            for worker_id, claimed_attempts in task.claim_counts.items():
+                worker = self.workers.get(worker_id)
+                registration = worker.registration if worker else None
+                contribution = contribution_data.setdefault(
+                    worker_id,
+                    {
+                        "worker_id": worker_id,
+                        "device_name": registration.device_name if registration else worker_id,
+                        "node": registration.node if registration else "unknown",
+                        "os_name": registration.os_name if registration else "unknown",
+                        "logical_cpu_cores": registration.logical_cpu_cores if registration else 0,
+                        "claimed_attempts": 0,
+                        "completed_tasks": 0,
+                        "active_tasks": 0,
+                        "failed_attempts": 0,
+                    },
+                )
+                contribution["claimed_attempts"] = int(contribution["claimed_attempts"]) + claimed_attempts
+                contribution["failed_attempts"] = int(contribution["failed_attempts"]) + task.failure_counts.get(worker_id, 0)
+                if task.status == "completed" and task.worker_id == worker_id:
+                    contribution["completed_tasks"] = int(contribution["completed_tasks"]) + 1
+                if task.status == "leased" and task.worker_id == worker_id:
+                    contribution["active_tasks"] = int(contribution["active_tasks"]) + 1
+        contributions = [JobWorkerContribution.model_validate(data) for data in contribution_data.values()]
+        contributions.sort(key=lambda item: (-item.completed_tasks, -item.claimed_attempts, item.device_name.lower()))
         return JobView(
             job_id=job.job_id,
             job_type=job.request.job_type,
@@ -277,12 +314,15 @@ class InMemoryCoordinator:
             chunk_size=job.request.chunk_size,
             status=job.status,
             created_at=job.created_at,
+            started_at=job.started_at,
             completed_at=job.completed_at,
             total_tasks=len(tasks),
             pending_tasks=counts["pending"],
             leased_tasks=counts["leased"],
             completed_tasks=counts["completed"],
             failed_tasks=counts["failed"],
+            worker_count=len(contributions),
+            workers=contributions,
             result=job.result,
             error=job.error,
         )
@@ -347,8 +387,18 @@ async def require_token(
 def create_app(
     api_token: str | None = None,
     store: InMemoryCoordinator | None = None,
+    cors_origins: list[str] | None = None,
 ) -> FastAPI:
     configured_token = api_token if api_token is not None else os.getenv("DISTRIBUTED_COMPUTE_TOKEN", "")
+    if cors_origins is None:
+        cors_origins = [
+            origin.strip()
+            for origin in os.getenv(
+                "DISTRIBUTED_COMPUTE_CORS_ORIGINS",
+                "http://localhost:5173,http://127.0.0.1:5173",
+            ).split(",")
+            if origin.strip()
+        ]
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -357,6 +407,14 @@ def create_app(
         yield
 
     application = FastAPI(title="Distributed Compute POC", version="0.1.0", lifespan=lifespan)
+    if cors_origins:
+        application.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_credentials=False,
+            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_headers=["Authorization", "Content-Type"],
+        )
     application.state.api_token = configured_token
     application.state.store = store or InMemoryCoordinator()
     protected = [Depends(require_token)]
@@ -412,10 +470,20 @@ def main() -> None:
     parser.add_argument("--host", default=os.getenv("COORDINATOR_HOST", "0.0.0.0"))
     parser.add_argument("--port", type=int, default=int(os.getenv("COORDINATOR_PORT", "8000")))
     parser.add_argument("--token", default=os.getenv("DISTRIBUTED_COMPUTE_TOKEN"))
+    parser.add_argument(
+        "--cors-origin",
+        action="append",
+        dest="cors_origins",
+        help="Allowed dashboard origin; repeat for multiple origins",
+    )
     args = parser.parse_args()
     if not args.token:
         parser.error("--token or DISTRIBUTED_COMPUTE_TOKEN is required")
-    uvicorn.run(create_app(api_token=args.token), host=args.host, port=args.port)
+    uvicorn.run(
+        create_app(api_token=args.token, cors_origins=args.cors_origins),
+        host=args.host,
+        port=args.port,
+    )
 
 
 if __name__ == "__main__":

@@ -9,6 +9,31 @@ Supported jobs:
 
 Workers execute only these predefined operations; the coordinator cannot send arbitrary Python code.
 
+## Make commands
+
+The root `Makefile` provides shortcuts for setup and local development:
+
+```bash
+make setup-all
+make start TOKEN='replace-with-a-long-random-token'
+```
+
+`make start` runs the coordinator and dashboard together. To include a local worker as well:
+
+```bash
+make start-all TOKEN='replace-with-a-long-random-token' WORKER_NAME='laptop-1'
+```
+
+Individual processes can be run in separate terminals:
+
+```bash
+make coordinator TOKEN='replace-with-a-long-random-token'
+make worker TOKEN='replace-with-a-long-random-token' COORDINATOR_URL='http://127.0.0.1:8000'
+make dashboard
+```
+
+Run `make help` for all targets and configurable values.
+
 ## Install
 
 Python 3.10 or newer is required.
@@ -97,6 +122,35 @@ curl -sS "$COORDINATOR_URL/api/v1/workers" \
 ```
 
 Interactive API documentation is available at `http://COORDINATOR_HOST:8000/docs`.
+
+## Coordinator dashboard
+
+The React dashboard uses Material UI and `lucide-react`. It shows live worker resources, aggregate capacity, job progress and results, and includes a form for submitting new jobs.
+
+With the coordinator running on port 8000, start the dashboard development server:
+
+```bash
+cd dashboard
+npm install
+npm run dev
+```
+
+Open `http://localhost:5173` and enter the same shared API token used by the coordinator. The default Vite proxy forwards API traffic to `http://127.0.0.1:8000`, including when another LAN device opens the dashboard through the coordinator machine.
+
+If the dashboard must call a coordinator at a different address directly, create `dashboard/.env.local`:
+
+```bash
+VITE_API_URL=http://192.168.1.20:8000
+```
+
+Allow that browser origin on the coordinator. Origins are comma-separated and must include the scheme and port:
+
+```bash
+export DISTRIBUTED_COMPUTE_CORS_ORIGINS='http://localhost:5173,http://192.168.1.20:5173'
+compute-coordinator --host 0.0.0.0 --port 8000
+```
+
+Alternatively, repeat `--cors-origin` on the coordinator command. To generate production assets, run `npm run build`; output is written to `dashboard/dist`.
 
 ## Behavior and limitations
 
